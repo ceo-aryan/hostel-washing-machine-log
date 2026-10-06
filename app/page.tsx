@@ -16,7 +16,9 @@ export default function Home() {
   // Dashboard State
   const [activeTab, setActiveTab] = useState<number>(2);
   const [logs, setLogs] = useState<any[]>([]);
-  const [activeLogId, setActiveLogId] = useState<string | null>(null);
+  
+  // NEW: Instead of just tracking an ID, we track the whole active session object
+  const [activeSession, setActiveSession] = useState<any>(null);
 
   // 1. Authentication & User Check
   useEffect(() => {
@@ -40,24 +42,26 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Fetch Logs & Check for Active Session
+  // 2. Fetch Logs & Check for ANY Active Session globally
   useEffect(() => {
     if (!isRegistered) return;
 
     const logsRef = collection(db, "logs");
+    // Fetch all logs for the current floor, ordered by newest first
     const q = query(logsRef, where("floor", "==", activeTab), orderBy("startTime", "desc"));
     
+    // onSnapshot creates a LIVE tunnel to the database. Updates instantly for everyone.
     const unsubscribeLogs = onSnapshot(q, (snapshot) => {
       const fetchedLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setLogs(fetchedLogs);
       
-      // Check if current user has an active machine running on this floor
-      const activeSession = fetchedLogs.find((log: any) => log.userId === user?.uid && log.status === "running");
-      setActiveLogId(activeSession ? activeSession.id : null);
+      // Check if ANY user has an active machine running on this floor
+      const runningSession = fetchedLogs.find((log: any) => log.status === "running");
+      setActiveSession(runningSession || null);
     });
 
     return () => unsubscribeLogs();
-  }, [activeTab, isRegistered, user]);
+  }, [activeTab, isRegistered]);
 
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
@@ -121,6 +125,13 @@ export default function Home() {
   // --- Washing Machine Controls ---
   const startMachine = async () => {
     if (!user || !userData) return;
+    
+    // Failsafe: Prevent starting if somehow the button was clicked while running
+    if (activeSession) {
+      toast.error("Machine is already in use by someone else.");
+      return;
+    }
+
     try {
       await addDoc(collection(db, "logs"), {
         userId: user.uid,
@@ -137,24 +148,25 @@ export default function Home() {
   };
 
   const stopMachine = async () => {
-    if (!activeLogId) return;
-    try {
-      const logRef = doc(db, "logs", activeLogId);
-      const logDoc = await getDoc(logRef);
-      const logData = logDoc.data();
-      
-      if (logData) {
-        const startTime = new Date(logData.startTime).getTime();
-        const stopTime = new Date().getTime();
-        const durationMins = Math.floor((stopTime - startTime) / 60000);
+    // Only allow the person who started it to stop it
+    if (!activeSession || activeSession.userId !== user?.uid) return;
 
-        await updateDoc(logRef, {
-          stopTime: new Date().toISOString(),
-          duration: durationMins,
-          status: "completed"
-        });
-        toast.success(`Machine stopped. Duration: ${durationMins} mins`);
-      }
+    try {
+      const logRef = doc(db, "logs", activeSession.id);
+      
+      const startTime = new Date(activeSession.startTime).getTime();
+      const stopTime = new Date().getTime();
+      
+      // Calculate duration (minimum 1 minute to avoid 0 mins)
+      let durationMins = Math.floor((stopTime - startTime) / 60000);
+      if (durationMins < 1) durationMins = 1;
+
+      await updateDoc(logRef, {
+        stopTime: new Date().toISOString(),
+        duration: durationMins,
+        status: "completed"
+      });
+      toast.success(`Machine stopped. Duration: ${durationMins} mins`);
     } catch (error) {
       toast.error("Failed to stop machine.");
     }
@@ -193,13 +205,24 @@ export default function Home() {
               ))}
             </div>
 
-            <div className="flex justify-center mb-8">
-              {activeLogId ? (
-                <button onClick={stopMachine} className="px-12 py-4 bg-red-500 text-white text-xl font-bold rounded-lg shadow-lg hover:bg-red-600 animate-pulse">
-                  STOP MACHINE
-                </button>
+            <div className="flex justify-center mb-8 w-full">
+              {/* CONDITIONAL RENDER FOR UI LOCKING */}
+              {activeSession ? (
+                // If a session is active, check who is running it
+                activeSession.userId === user?.uid ? (
+                  // I am running it -> Show Stop Button
+                  <button onClick={stopMachine} className="w-full md:w-auto px-12 py-4 bg-red-500 text-white text-xl font-bold rounded-lg shadow-lg hover:bg-red-600 animate-pulse transition-all">
+                    STOP MACHINE
+                  </button>
+                ) : (
+                  // Someone else is running it -> Lock the UI
+                  <div className="w-full md:w-auto px-8 py-4 bg-gray-200 text-gray-700 text-lg font-semibold rounded-lg text-center border-2 border-gray-300">
+                    Machine is already running by Room {activeSession.roomNumber}
+                  </div>
+                )
               ) : (
-                <button onClick={startMachine} className="px-12 py-4 bg-green-500 text-white text-xl font-bold rounded-lg shadow-lg hover:bg-green-600">
+                // No active session -> Show Start Button
+                <button onClick={startMachine} className="w-full md:w-auto px-12 py-4 bg-green-500 text-white text-xl font-bold rounded-lg shadow-lg hover:bg-green-600 transition-all">
                   START MACHINE
                 </button>
               )}
@@ -217,7 +240,7 @@ export default function Home() {
                   </div>
                   <div className="text-right">
                     {log.status === "running" ? (
-                      <span className="text-blue-600 font-semibold">Running...</span>
+                      <span className="text-blue-600 font-semibold animate-pulse">Running...</span>
                     ) : (
                       <span className="text-gray-600 font-medium">{log.duration} mins</span>
                     )}
