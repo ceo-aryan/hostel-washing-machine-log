@@ -1,30 +1,23 @@
 {
   "name": "hostel-wash-log",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Hostel washing machine usage log",
+  "main": "server.js",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
-    "firebase": "^12.19.0",
-    "next": "16.3.8",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "react-hot-toast": "^2.6.1"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.3",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "autoprefixer": "^10.6.1",
-    "eslint": "^9",
-    "eslint-config-next": "16.3.8",
-    "postcss": "^8.5.29",
-    "tailwindcss": "^4.3.3",
-    "typescript": "^5"
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "google-auth-library": "^9.14.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
   }
 }

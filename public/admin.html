@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin · Washing machine log</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <div class="brand">Admin dashboard</div>
+      <button type="button" onclick="logout()">Log out</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <section class="card">
+      <div class="head-row">
+        <h2>Registered students (<span id="userCount">0</span>)</h2>
+        <a class="btn" href="/api/admin/export/users.csv">Download CSV</a>
+      </div>
+      <div id="userMsg" class="msg" hidden></div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Email</th><th>Room</th><th>Floor</th><th>Registered</th><th></th></tr>
+          </thead>
+          <tbody id="userRows"></tbody>
+        </table>
+      </div>
+      <p id="userEmpty" class="muted empty" hidden>No students have registered yet.</p>
+    </section>
+
+    <section class="card">
+      <div class="head-row">
+        <h2>Washing machine logs</h2>
+        <a class="btn primary" href="/api/admin/export/logs.csv">Download all logs (CSV)</a>
+      </div>
+      <p class="muted small">Showing the latest 300 entries. The CSV has everything.</p>
+      <div id="logMsg" class="msg" hidden></div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Machine</th><th>Name</th><th>Room</th><th>Started</th><th>Stopped</th><th class="num">Minutes</th><th></th></tr>
+          </thead>
+          <tbody id="logRows"></tbody>
+        </table>
+      </div>
+      <p id="logEmpty" class="muted empty" hidden>No logs yet.</p>
+    </section>
+
+    <section class="card">
+      <h2>Change admin password</h2>
+      <form id="pwForm" style="max-width:340px">
+        <label for="curPw">Current password</label>
+        <input id="curPw" type="password" autocomplete="current-password" required>
+        <label for="newPw">New password (8+ characters)</label>
+        <input id="newPw" type="password" autocomplete="new-password" minlength="8" required>
+        <label for="newPw2">Confirm new password</label>
+        <input id="newPw2" type="password" autocomplete="new-password" minlength="8" required>
+        <button class="primary" type="submit">Save password</button>
+        <div id="pwMsg" class="msg" hidden></div>
+      </form>
+    </section>
+
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const ORD = { 2: '2nd', 4: '4th', 6: '6th' };
+    let users = [];
+    let editingId = null;
+
+    function renderUsers() {
+      $('userCount').textContent = users.length;
+      $('userEmpty').hidden = users.length > 0;
+      $('userRows').innerHTML = users.map((u) => {
+        if (u.id === editingId) {
+          return `<tr>
+            <td><input type="text" id="editName" value="${esc(u.name)}" maxlength="100" aria-label="Name"></td>
+            <td>${esc(u.email)}</td>
+            <td><input type="text" class="room" id="editRoom" value="${esc(u.room)}" maxlength="3" inputmode="numeric" aria-label="Room number"></td>
+            <td>${esc(u.floor)}</td>
+            <td>${esc(fmtTime(u.created_at))}</td>
+            <td><div class="row-actions">
+              <button class="primary" data-act="save" data-id="${u.id}">Save</button>
+              <button data-act="cancel">Cancel</button>
+            </div></td>
+          </tr>`;
+        }
+        return `<tr>
+          <td>${esc(u.name)}</td>
+          <td>${esc(u.email)}</td>
+          <td>${esc(u.room)}</td>
+          <td>${esc(u.floor)}</td>
+          <td>${esc(fmtTime(u.created_at))}</td>
+          <td><button data-act="edit" data-id="${u.id}">Edit</button></td>
+        </tr>`;
+      }).join('');
+    }
+
+    function renderLogs(logs) {
+      $('logEmpty').hidden = logs.length > 0;
+      $('logRows').innerHTML = logs.map((l) => `
+        <tr>
+          <td>${esc(ORD[l.machine_floor] || l.machine_floor)} floor</td>
+          <td>${esc(l.name)}</td>
+          <td>${esc(l.room)}</td>
+          <td>${esc(fmtTime(l.start_time))}</td>
+          <td>${l.end_time ? esc(fmtTime(l.end_time)) : '<span class="running">Running</span>'}</td>
+          <td class="num">${l.end_time ? esc(l.duration_minutes) : '–'}</td>
+          <td>${l.end_time ? '' : `<button data-act="forcestop" data-id="${l.id}">Stop now</button>`}</td>
+        </tr>`).join('');
+    }
+
+    function handleAuthError(e) {
+      if (e.status === 401) location.href = '/';
+    }
+
+    async function loadUsers() {
+      try {
+        users = (await api('/api/admin/users')).users;
+        renderUsers();
+      } catch (e) {
+        handleAuthError(e);
+        showMsg($('userMsg'), e.message);
+      }
+    }
+
+    async function loadLogs() {
+      try {
+        renderLogs((await api('/api/admin/logs')).logs);
+      } catch (e) {
+        handleAuthError(e);
+        showMsg($('logMsg'), e.message);
+      }
+    }
+
+    $('userRows').addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-act]');
+      if (!btn) return;
+      const act = btn.dataset.act;
+      showMsg($('userMsg'), '');
+      if (act === 'edit') {
+        editingId = Number(btn.dataset.id);
+        renderUsers();
+      } else if (act === 'cancel') {
+        editingId = null;
+        renderUsers();
+      } else if (act === 'save') {
+        try {
+          await api(`/api/admin/users/${btn.dataset.id}`, {
+            method: 'PUT',
+            body: { name: $('editName').value, room: $('editRoom').value.trim() },
+          });
+          editingId = null;
+          await Promise.all([loadUsers(), loadLogs()]);
+          showMsg($('userMsg'), 'Saved.', 'ok');
+        } catch (e) {
+          handleAuthError(e);
+          showMsg($('userMsg'), e.message);
+        }
+      }
+    });
+
+    $('logRows').addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-act="forcestop"]');
+      if (!btn) return;
+      if (!confirm('Stop this running session now?')) return;
+      showMsg($('logMsg'), '');
+      try {
+        await api(`/api/admin/logs/${btn.dataset.id}/stop`, { method: 'POST' });
+        await loadLogs();
+      } catch (e) {
+        handleAuthError(e);
+        showMsg($('logMsg'), e.message);
+        loadLogs();
+      }
+    });
+
+    $('pwForm').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      showMsg($('pwMsg'), '');
+      if ($('newPw').value !== $('newPw2').value) return showMsg($('pwMsg'), 'New passwords do not match.');
+      try {
+        await api('/api/admin/password', { method: 'POST', body: { currentPassword: $('curPw').value, newPassword: $('newPw').value } });
+        $('pwForm').reset();
+        showMsg($('pwMsg'), 'Password changed.', 'ok');
+      } catch (e) {
+        showMsg($('pwMsg'), e.message);
+      }
+    });
+
+    (async function init() {
+      try {
+        const me = await api('/api/me');
+        if (me.role !== 'admin') return (location.href = '/');
+      } catch (_) {
+        return (location.href = '/');
+      }
+      loadUsers();
+      loadLogs();
+    })();
+  </script>
+</body>
+</html>

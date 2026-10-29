@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Washing machine log</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <div>
+        <div class="brand">Washing machine log</div>
+        <div class="small muted"><span class="who" id="who"></span></div>
+      </div>
+      <button type="button" onclick="logout()">Log out</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="tabs" role="tablist" aria-label="Washing machine floor">
+      <button class="tab" role="tab" data-floor="2" aria-selected="false">2nd floor</button>
+      <button class="tab" role="tab" data-floor="4" aria-selected="false">4th floor</button>
+      <button class="tab" role="tab" data-floor="6" aria-selected="false">6th floor</button>
+    </div>
+
+    <div id="status" class="status free" role="status"><span class="dot"></span><span id="statusText">Loading…</span></div>
+
+    <section class="card">
+      <h2 id="histTitle">Log history</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Room</th><th>Started</th><th>Stopped</th><th class="num">Minutes</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p id="empty" class="muted empty" hidden>No one has used this machine yet.</p>
+    </section>
+
+    <section class="card action">
+      <div id="actionMsg" class="msg" hidden></div>
+      <button id="actionBtn" type="button" disabled>Start</button>
+      <p id="hint" class="muted small hint"></p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const ORD = { 2: '2nd', 4: '4th', 6: '6th' };
+    let floor = 2;
+    let me = null;
+    let busy = false;
+
+    function render(data) {
+      const { logs, active, mine } = data;
+
+      $('histTitle').textContent = `${ORD[floor]} floor log history`;
+      $('rows').innerHTML = logs.map((l) => `
+        <tr>
+          <td>${esc(l.name)}</td>
+          <td>${esc(l.room)}</td>
+          <td>${esc(fmtTime(l.start_time))}</td>
+          <td>${l.end_time ? esc(fmtTime(l.end_time)) : '<span class="running">Running</span>'}</td>
+          <td class="num">${l.end_time ? esc(l.duration_minutes) : '–'}</td>
+        </tr>`).join('');
+      $('empty').hidden = logs.length > 0;
+
+      const status = $('status');
+      if (active) {
+        status.className = 'status busy';
+        const who = active.user_id === me.id ? 'you' : `${active.name} (room ${active.room})`;
+        $('statusText').textContent = `In use by ${who} since ${fmtTime(active.start_time)}`;
+      } else {
+        status.className = 'status free';
+        $('statusText').textContent = 'Machine is free';
+      }
+
+      const btn = $('actionBtn');
+      const hint = $('hint');
+      btn.className = '';
+      if (mine && mine.machine_floor === floor) {
+        btn.textContent = 'Stop';
+        btn.className = 'danger';
+        btn.disabled = false;
+        btn.dataset.action = 'stop';
+        hint.textContent = 'Press Stop after you turn the washing machine off.';
+      } else if (mine) {
+        btn.textContent = 'Start';
+        btn.disabled = true;
+        btn.dataset.action = '';
+        hint.textContent = `You have a machine running on the ${ORD[mine.machine_floor]} floor. Stop it first.`;
+      } else if (active) {
+        btn.textContent = 'Start';
+        btn.disabled = true;
+        btn.dataset.action = '';
+        hint.textContent = `This machine is in use. Wait until ${active.name} stops it.`;
+      } else {
+        btn.textContent = 'Start';
+        btn.className = 'primary';
+        btn.disabled = false;
+        btn.dataset.action = 'start';
+        hint.textContent = 'Press Start when you turn the washing machine on.';
+      }
+    }
+
+    async function load() {
+      if (busy) return;
+      try {
+        render(await api(`/api/logs?floor=${floor}`));
+        showMsg($('actionMsg'), '');
+      } catch (e) {
+        if (e.status === 401 || e.code === 'no_room') return (location.href = '/');
+        showMsg($('actionMsg'), e.message);
+      }
+    }
+
+    function selectFloor(f) {
+      floor = f;
+      document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(Number(t.dataset.floor) === f)));
+      load();
+    }
+
+    document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => selectFloor(Number(t.dataset.floor))));
+
+    $('actionBtn').addEventListener('click', async () => {
+      const action = $('actionBtn').dataset.action;
+      if (!action) return;
+      busy = true;
+      $('actionBtn').disabled = true;
+      showMsg($('actionMsg'), '');
+      try {
+        await api(`/api/logs/${action}`, { method: 'POST', body: { floor } });
+      } catch (e) {
+        showMsg($('actionMsg'), e.message);
+      }
+      busy = false;
+      const msg = $('actionMsg').textContent;
+      await load();
+      if (msg) showMsg($('actionMsg'), msg);
+    });
+
+    (async function init() {
+      try {
+        me = await api('/api/me');
+      } catch (e) {
+        return (location.href = '/');
+      }
+      if (me.role === 'admin') return (location.href = '/admin.html');
+      if (me.role !== 'student' || !me.registered) return (location.href = '/');
+      $('who').textContent = `${me.name} · Room ${me.room}`;
+
+      // Open the tab where this student's machine is running, otherwise their own floor
+      let start = [2, 4, 6].includes(me.floor) ? me.floor : 2;
+      try {
+        const probe = await api(`/api/logs?floor=${start}`);
+        if (probe.mine) start = probe.mine.machine_floor;
+      } catch (_) { /* ignore */ }
+      selectFloor(start);
+      setInterval(load, 10000);
+    })();
+  </script>
+</body>
+</html>

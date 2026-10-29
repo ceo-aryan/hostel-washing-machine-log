@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hostel Washing Machine Log</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <main class="wrap narrow">
+
+    <!-- Step 1: login -->
+    <section id="loginView" class="card" hidden>
+      <h1>Washing machine log</h1>
+      <p class="muted">Log when you start and stop the hostel washing machine.</p>
+
+      <div id="gbtn"></div>
+      <p class="muted small" style="text-align:center">Use your college email ending with <span id="domain">@mitsgwl.ac.in</span></p>
+      <div id="loginMsg" class="msg" hidden></div>
+
+      <div class="divider">or</div>
+
+      <button id="adminToggle" type="button" style="width:100%">Admin login</button>
+      <form id="adminForm" hidden style="margin-top:1rem">
+        <label for="adminUser">Username</label>
+        <input id="adminUser" type="text" autocomplete="username" autocapitalize="none" required>
+        <label for="adminPass">Password</label>
+        <input id="adminPass" type="password" autocomplete="current-password" required>
+        <button class="primary" type="submit" style="width:100%">Log in as admin</button>
+        <div id="adminMsg" class="msg" hidden></div>
+      </form>
+    </section>
+
+    <!-- Step 2: room number (first login only) -->
+    <section id="roomView" class="card" hidden>
+      <h1>Enter your room number</h1>
+      <p class="muted">Signed in as <strong id="roomName"></strong></p>
+
+      <div class="msg warn">Your room number can't be changed after you submit it. Check it before you continue.</div>
+
+      <form id="roomForm" novalidate>
+        <label for="room">Room number</label>
+        <input id="room" type="text" inputmode="numeric" maxlength="3" placeholder="e.g. 201 or 704" autocomplete="off" required>
+        <button class="primary" type="submit" style="width:100%">Submit room number</button>
+        <div id="roomMsg" class="msg" hidden></div>
+      </form>
+
+      <p style="margin-top:1rem;text-align:center"><button type="button" class="linkbtn" onclick="logout()">Use a different account</button></p>
+    </section>
+
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    const ROOM_RANGES = [[101,111],[201,211],[301,312],[401,408],[501,508],[601,604],[701,704]];
+    const validRoom = (s) => /^\d{3}$/.test(s) && ROOM_RANGES.some(([a, b]) => +s >= a && +s <= b);
+
+    const $ = (id) => document.getElementById(id);
+    let googleClientId = null;
+    let googleReady = false;
+    let googleStarted = false;
+
+    function startGoogle() {
+      if (googleStarted || !googleClientId || !googleReady) return;
+      googleStarted = true;
+      google.accounts.id.initialize({ client_id: googleClientId, callback: onGoogle });
+      google.accounts.id.renderButton($('gbtn'), { theme: 'outline', size: 'large', text: 'signin_with', width: 280 });
+    }
+    window.onGoogleLibraryLoad = () => { googleReady = true; startGoogle(); };
+
+    async function onGoogle(response) {
+      showMsg($('loginMsg'), '');
+      try {
+        const r = await api('/api/auth/google', { method: 'POST', body: { credential: response.credential } });
+        if (r.registered) location.href = '/main.html';
+        else showRoom();
+      } catch (e) {
+        showMsg($('loginMsg'), e.message);
+      }
+    }
+
+    async function showRoom() {
+      const me = await api('/api/me');
+      $('roomName').textContent = me.name;
+      $('loginView').hidden = true;
+      $('roomView').hidden = false;
+      $('room').focus();
+    }
+
+    $('roomForm').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const room = $('room').value.trim();
+      showMsg($('roomMsg'), '');
+      if (!validRoom(room)) return showMsg($('roomMsg'), 'Invalid room number.');
+      if (!confirm(`Submit room ${room}? You can't change it later.`)) return;
+      try {
+        await api('/api/register', { method: 'POST', body: { room } });
+        location.href = '/main.html';
+      } catch (e) {
+        showMsg($('roomMsg'), e.message);
+      }
+    });
+
+    $('adminToggle').addEventListener('click', () => {
+      $('adminForm').hidden = !$('adminForm').hidden;
+      if (!$('adminForm').hidden) $('adminUser').focus();
+    });
+
+    $('adminForm').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      showMsg($('adminMsg'), '');
+      try {
+        await api('/api/auth/admin', { method: 'POST', body: { username: $('adminUser').value, password: $('adminPass').value } });
+        location.href = '/admin.html';
+      } catch (e) {
+        showMsg($('adminMsg'), e.message);
+      }
+    });
+
+    (async function init() {
+      try {
+        const [cfg, me] = await Promise.all([api('/api/config'), api('/api/me')]);
+        googleClientId = cfg.googleClientId;
+        $('domain').textContent = cfg.domain;
+        if (me.role === 'admin') return (location.href = '/admin.html');
+        if (me.role === 'student' && me.registered) return (location.href = '/main.html');
+        if (me.role === 'student') return showRoom();
+        $('loginView').hidden = false;
+        if (window.google && google.accounts) googleReady = true;
+        startGoogle();
+      } catch (e) {
+        $('loginView').hidden = false;
+        showMsg($('loginMsg'), e.message);
+      }
+    })();
+  </script>
+</body>
+</html>
